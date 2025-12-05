@@ -1,0 +1,1 @@
+Le lien de la plateforme https://hackathon-x-poc.ramify.fr/
