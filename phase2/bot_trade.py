@@ -99,11 +99,11 @@ def make_decision(epoch: int, price: float):
         if price > state.ema_fast:
             allocation = 1.0
         else:
-            allocation = 0.8
+            allocation = 0.9
             
-        if rsi_val > 85:
-            allocation = 0.6
-        if rsi_val > 92:
+        if rsi_val > 88:
+            allocation = 0.7
+        if rsi_val > 95:
             allocation = 0.0
     else:
         allocation = 0.0
