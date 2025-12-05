@@ -1,17 +1,23 @@
 
-
-import random
-
 history = []
 
-def get_delta(history: list[dict[str, int]]) -> float:
-    return history[-1]["price"] - history[-2]["price"]
-
 def make_decision(epoch: int, price: float):
-    history.append({"epoch": epoch, "price": price})
-    if (len(history) < 2):
-        return {'Asset A':0.5, 'Cash': 0.5}
-    if get_delta(history) > 0:
-        return {'Asset A':0.7, 'Cash': 0.3}
-    else:
-        return {'Asset A':0.3, 'Cash': 0.7}
+    history.append(price)
+
+    if len(history) < 3:
+        return {"Asset A": 0.5, "Cash": 0.5}
+
+    short_window = 5
+    long_window = 20
+
+    short_ma = sum(history[-short_window:]) / min(len(history), short_window)
+    long_ma = sum(history[-long_window:]) / min(len(history), long_window)
+
+    signal = (short_ma - long_ma) / long_ma
+    allocation_asset = 0.5 + max(min(signal * 5, 0.3), -0.3)  
+    allocation_asset = max(0.2, min(0.8, allocation_asset))
+
+    return {
+        "Asset A": allocation_asset,
+        "Cash": 1 - allocation_asset
+    }
