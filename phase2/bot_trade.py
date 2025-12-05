@@ -1,88 +1,103 @@
-import pandas as pd
-import numpy as np
+import math
 from collections import deque
 
-history_prices = deque(maxlen=300)
+history = deque(maxlen=200)
+
+def calculate_ema(data, span):
+    if not data:
+        return 0.0
+    alpha = 2 / (span + 1)
+    ema = data[0]
+    for price in data[1:]:
+        ema = alpha * price + (1 - alpha) * ema
+    return ema
+
+def calculate_rsi(data, period=14):
+    if len(data) < period + 1:
+        return 50.0
+    
+    gains = 0.0
+    losses = 0.0
+
+    for i in range(1, period + 1):
+        change = data[i] - data[i-1]
+        if change > 0:
+            gains += change
+        else:
+            losses -= change
+            
+    avg_gain = gains / period
+    avg_loss = losses / period
+
+    for i in range(period + 1, len(data)):
+        change = data[i] - data[i-1]
+        gain = change if change > 0 else 0.0
+        loss = -change if change < 0 else 0.0
+        
+        avg_gain = (avg_gain * (period - 1) + gain) / period
+        avg_loss = (avg_loss * (period - 1) + loss) / period
+        
+    if avg_loss == 0:
+        return 100.0
+    
+    rs = avg_gain / avg_loss
+    return 100.0 - (100.0 / (1.0 + rs))
+
+def calculate_volatility(data, window=20):
+    if len(data) < window + 1:
+        return 0.0
+
+    returns = []
+    subset = list(data)[-window-1:]
+    for i in range(1, len(subset)):
+        if subset[i-1] == 0:
+            ret = 0
+        else:
+            ret = (subset[i] - subset[i-1]) / subset[i-1]
+        returns.append(ret)
+
+    mean_ret = sum(returns) / len(returns)
+    variance = sum((r - mean_ret) ** 2 for r in returns) / len(returns)
+    return math.sqrt(variance)
 
 def make_decision(epoch: int, price: float):
-    global history_prices
-    history_prices.append(price)
+    global history
+    history.append(price)
 
-    # 1. WARMUP
-    # On a besoin d'au moins 60 points pour l'EMA lente
-    if len(history_prices) < 60:
+    if len(history) < 60:
         return {'Asset B': 0.0, 'Cash': 1.0}
 
-    # 2. DATA PREPARATION
-    # Conversion rapide : la liste ne fait JAMAIS plus de 300 éléments.
-    # C'est très léger pour la RAM.
-    df = pd.DataFrame(list(history_prices), columns=['close'])
-
-    # 3. INDICATORS
-    
-    # A. Trend (EMA)
-    # EMA 20 (Rapide) et EMA 60 (Lente)
-    df['ema_fast'] = df['close'].ewm(span=20, adjust=False).mean()
-    df['ema_slow'] = df['close'].ewm(span=60, adjust=False).mean()
-
-    # B. RSI (14)
-    delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / loss.replace(0, 1e-9)
-    df['rsi'] = 100 - (100 / (1 + rs))
-
-    # C. Volatility (20)
-    df['returns'] = df['close'].pct_change()
-    current_vol = df['returns'].rolling(window=20).std().iloc[-1]
-
-    # Valeurs actuelles
-    current_price = df['close'].iloc[-1]
-    ema_fast = df['ema_fast'].iloc[-1]
-    ema_slow = df['ema_slow'].iloc[-1]
-    current_rsi = df['rsi'].iloc[-1]
-
-    # 4. STRATEGY LOGIC (Asset B Focus)
-    
+    prices = list(history)
+    current_price = prices[-1]
+    ema_fast = calculate_ema(prices, 20)
+    ema_slow = calculate_ema(prices, 60)
+    rsi_val = calculate_rsi(prices, 14)
+    vol_val = calculate_volatility(history, 20)
     allocation = 0.0
-    
-    # Check Regime: Bull or Bear?
     is_bull_trend = current_price > ema_slow
     
     if is_bull_trend:
-        # === BULL MARKET ===
         if current_price > ema_fast:
-            # Full Momentum
             allocation = 1.0
         else:
-            # Correction saine
             allocation = 0.8
-            
-        # Profit Taking sur excès (RSI > 80)
-        if current_rsi > 80:
+        if rsi_val > 80:
             allocation = 0.7
             
     else:
-        # === BEAR MARKET ===
-        # Défense absolue pour éviter les -43%
         allocation = 0.0
-        
-        # Sauf si Crash extrême (Rebond technique)
-        if current_rsi < 25:
+        if rsi_val < 25:
             allocation = 0.4
-            
-    # 5. VOLATILITY SCALING (Risk Management)
+
     target_vol = 0.015
     
-    if current_vol > 0:
-        vol_scalar = target_vol / current_vol
-        vol_scalar = min(1.0, vol_scalar)
-        allocation = allocation * vol_scalar
+    if vol_val > 0:
+        scalar = target_vol / vol_val
+        scalar = min(1.0, scalar)
+        allocation = allocation * scalar
 
-    # 6. FINAL CHECKS
     allocation = max(0.0, min(1.0, allocation))
-    
-    if allocation < 0.05:
+    if allocation < 0.05: 
         allocation = 0.0
 
     return {
