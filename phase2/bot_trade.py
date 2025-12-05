@@ -1,7 +1,7 @@
 import math
 from collections import deque
 
-history = deque(maxlen=200)
+history = deque(maxlen=300)
 
 def calculate_ema(data, span):
     if not data:
@@ -18,7 +18,7 @@ def calculate_rsi(data, period=14):
     
     gains = 0.0
     losses = 0.0
-
+    
     for i in range(1, period + 1):
         change = data[i] - data[i-1]
         if change > 0:
@@ -28,7 +28,7 @@ def calculate_rsi(data, period=14):
             
     avg_gain = gains / period
     avg_loss = losses / period
-
+    
     for i in range(period + 1, len(data)):
         change = data[i] - data[i-1]
         gain = change if change > 0 else 0.0
@@ -46,7 +46,7 @@ def calculate_rsi(data, period=14):
 def calculate_volatility(data, window=20):
     if len(data) < window + 1:
         return 0.0
-
+    
     returns = []
     subset = list(data)[-window-1:]
     for i in range(1, len(subset)):
@@ -55,7 +55,7 @@ def calculate_volatility(data, window=20):
         else:
             ret = (subset[i] - subset[i-1]) / subset[i-1]
         returns.append(ret)
-
+        
     mean_ret = sum(returns) / len(returns)
     variance = sum((r - mean_ret) ** 2 for r in returns) / len(returns)
     return math.sqrt(variance)
@@ -64,37 +64,53 @@ def make_decision(epoch: int, price: float):
     global history
     history.append(price)
 
-    if len(history) < 60:
+    if len(history) < 50:
         return {'Asset B': 0.0, 'Cash': 1.0}
 
     prices = list(history)
     current_price = prices[-1]
-    ema_fast = calculate_ema(prices, 20)
-    ema_slow = calculate_ema(prices, 60)
+    
+    ema_fast = calculate_ema(prices, 10)
+    ema_slow = calculate_ema(prices, 40)
+    
     rsi_val = calculate_rsi(prices, 14)
     vol_val = calculate_volatility(history, 20)
+
     allocation = 0.0
+    
     is_bull_trend = current_price > ema_slow
     
     if is_bull_trend:
         if current_price > ema_fast:
             allocation = 1.0
         else:
-            allocation = 0.8
+            allocation = 0.6
+            
         if rsi_val > 80:
-            allocation = 0.7
+            allocation = 0.5
+        if rsi_val > 90:
+            allocation = 0.0
             
     else:
         allocation = 0.0
-        if rsi_val < 25:
-            allocation = 0.4
+        
+    recent_high = 0
+    recent_prices = prices[-15:]
+    if recent_prices:
+        recent_high = max(recent_prices)
+    
+    if recent_high > 0:
+        drawdown_pct = (current_price - recent_high) / recent_high
+        if drawdown_pct < -0.04:
+            allocation = 0.0
 
-    target_vol = 0.015
+    target_vol = 0.02
     
     if vol_val > 0:
         scalar = target_vol / vol_val
-        scalar = min(1.0, scalar)
-        allocation = allocation * scalar
+        if scalar < 1.0:
+             scalar = max(0.5, scalar)
+             allocation = allocation * scalar
 
     allocation = max(0.0, min(1.0, allocation))
     if allocation < 0.05: 
