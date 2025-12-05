@@ -1,119 +1,128 @@
 import math
 from collections import deque
 
-history = deque(maxlen=300)
+class BotState:
+    def __init__(self):
+        self.last_epoch = -1
+        
+        self.ema_fast = None
+        self.ema_slow = None
+        
+        self.prev_price_rsi = None
+        self.avg_gain = 0.0
+        self.avg_loss = 0.0
+        self.rsi_initialized = False
+        self.rsi_warmup_count = 0
+        
+        self.returns_buffer = deque(maxlen=20)
+        self.prices_buffer = deque(maxlen=15)
 
-def calculate_ema(data, span):
-    if not data:
-        return 0.0
+state = BotState()
+
+def update_ema(current_ema, price, span):
+    if current_ema is None:
+        return price
     alpha = 2 / (span + 1)
-    ema = data[0]
-    for price in data[1:]:
-        ema = alpha * price + (1 - alpha) * ema
-    return ema
+    return alpha * price + (1 - alpha) * current_ema
 
-def calculate_rsi(data, period=14):
-    if len(data) < period + 1:
+def update_rsi(price):
+    if state.prev_price_rsi is None:
+        state.prev_price_rsi = price
         return 50.0
-    
-    gains = 0.0
-    losses = 0.0
-    
-    for i in range(1, period + 1):
-        change = data[i] - data[i-1]
-        if change > 0:
-            gains += change
-        else:
-            losses -= change
-            
-    avg_gain = gains / period
-    avg_loss = losses / period
-    
-    for i in range(period + 1, len(data)):
-        change = data[i] - data[i-1]
-        gain = change if change > 0 else 0.0
-        loss = -change if change < 0 else 0.0
         
-        avg_gain = (avg_gain * (period - 1) + gain) / period
-        avg_loss = (avg_loss * (period - 1) + loss) / period
+    change = price - state.prev_price_rsi
+    state.prev_price_rsi = price
+    
+    gain = change if change > 0 else 0.0
+    loss = -change if change < 0 else 0.0
+    
+    period = 14
+    
+    if not state.rsi_initialized:
+        state.rsi_warmup_count += 1
+        state.avg_gain += gain
+        state.avg_loss += loss
         
-    if avg_loss == 0:
+        if state.rsi_warmup_count >= period:
+            state.avg_gain /= period
+            state.avg_loss /= period
+            state.rsi_initialized = True
+        return 50.0
+    else:
+        state.avg_gain = (state.avg_gain * (period - 1) + gain) / period
+        state.avg_loss = (state.avg_loss * (period - 1) + loss) / period
+        
+    if state.avg_loss == 0:
         return 100.0
     
-    rs = avg_gain / avg_loss
+    rs = state.avg_gain / state.avg_loss
     return 100.0 - (100.0 / (1.0 + rs))
 
-def calculate_volatility(data, window=20):
-    if len(data) < window + 1:
+def get_volatility():
+    if len(state.returns_buffer) < 2:
         return 0.0
     
-    returns = []
-    subset = list(data)[-window-1:]
-    for i in range(1, len(subset)):
-        if subset[i-1] == 0:
-            ret = 0
-        else:
-            ret = (subset[i] - subset[i-1]) / subset[i-1]
-        returns.append(ret)
-        
-    mean_ret = sum(returns) / len(returns)
-    variance = sum((r - mean_ret) ** 2 for r in returns) / len(returns)
+    data = list(state.returns_buffer)
+    mean_ret = sum(data) / len(data)
+    variance = sum((r - mean_ret) ** 2 for r in data) / len(data)
     return math.sqrt(variance)
 
 def make_decision(epoch: int, price: float):
-    global history
-    history.append(price)
+    global state
+    
+    if epoch == 0 or epoch < state.last_epoch:
+        state = BotState()
+    state.last_epoch = epoch
 
-    if len(history) < 50:
+    if state.prices_buffer:
+        prev_p = state.prices_buffer[-1]
+        if prev_p > 0:
+            ret = (price - prev_p) / prev_p
+            state.returns_buffer.append(ret)
+    state.prices_buffer.append(price)
+    
+    state.ema_fast = update_ema(state.ema_fast, price, 10)
+    state.ema_slow = update_ema(state.ema_slow, price, 40)
+    
+    rsi_val = update_rsi(price)
+    
+    vol_val = get_volatility()
+
+    if epoch < 50:
         return {'Asset B': 0.0, 'Cash': 1.0}
-
-    prices = list(history)
-    current_price = prices[-1]
-    
-    ema_fast = calculate_ema(prices, 10)
-    ema_slow = calculate_ema(prices, 40)
-    
-    rsi_val = calculate_rsi(prices, 14)
-    vol_val = calculate_volatility(history, 20)
 
     allocation = 0.0
     
-    is_bull_trend = current_price > ema_slow
+    is_bull = price > state.ema_slow
     
-    if is_bull_trend:
-        if current_price > ema_fast:
+    if is_bull:
+        if price > state.ema_fast:
             allocation = 1.0
         else:
+            allocation = 0.8
+            
+        if rsi_val > 85:
             allocation = 0.6
-            
-        if rsi_val > 80:
-            allocation = 0.5
-        if rsi_val > 90:
+        if rsi_val > 92:
             allocation = 0.0
-            
     else:
         allocation = 0.0
-        
-    recent_high = 0
-    recent_prices = prices[-15:]
-    if recent_prices:
-        recent_high = max(recent_prices)
-    
-    if recent_high > 0:
-        drawdown_pct = (current_price - recent_high) / recent_high
-        if drawdown_pct < -0.04:
+
+    recent_max = max(state.prices_buffer)
+    if recent_max > 0:
+        dd = (price - recent_max) / recent_max
+        if dd < -0.04:
             allocation = 0.0
 
-    target_vol = 0.02
-    
+    target_vol = 0.025
     if vol_val > 0:
         scalar = target_vol / vol_val
         if scalar < 1.0:
-             scalar = max(0.5, scalar)
-             allocation = allocation * scalar
+            scalar = max(0.5, scalar)
+            allocation = allocation * scalar
 
     allocation = max(0.0, min(1.0, allocation))
-    if allocation < 0.05: 
+    if allocation < 0.05:
         allocation = 0.0
 
     return {
