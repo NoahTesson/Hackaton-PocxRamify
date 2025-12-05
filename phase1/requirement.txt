@@ -4,7 +4,7 @@ numpy
 
 # Optional dependencies below (uncomment if needed)
 # scipy
-# scikit-learn
+scikit-learn
 # xgboost
 # lightgbm
 # catboost
