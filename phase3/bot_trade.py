@@ -57,9 +57,7 @@ def make_decision(epoch: int, priceA: float, priceB: float):
             alloc_a = 0.0
 
     alloc_b = 0.0
-    is_bull = False
     if state.b_ema_slow is not None and priceB > state.b_ema_slow:
-        is_bull = True
         if priceB > state.b_ema_fast:
             alloc_b = 1.0
         else:
