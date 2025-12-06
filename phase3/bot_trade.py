@@ -3,8 +3,9 @@ from collections import deque
 
 class BotState:
     def __init__(self):
-        self.history_a = deque(maxlen=50)
-        self.history_b = deque(maxlen=50)
+        self.history_a = deque(maxlen=30)
+        self.history_b = deque(maxlen=30)
+        self.b_highs = deque(maxlen=15)
         self.b_ema_fast = None
         self.b_ema_slow = None
 
@@ -13,11 +14,15 @@ state = BotState()
 def get_stats(history):
     if len(history) < 20:
         return 0.0, 0.0
-    
+
     data = list(history)[-20:]
     mean = sum(data) / len(data)
-    variance = sum((x - mean) ** 2 for x in data) / len(data)
-    std = math.sqrt(variance)
+    
+    if len(data) > 1:
+        variance = sum((x - mean) ** 2 for x in data) / (len(data) - 1)
+        std = math.sqrt(variance)
+    else:
+        std = 0.0
     
     return mean, std
 
@@ -32,8 +37,9 @@ def make_decision(epoch: int, priceA: float, priceB: float):
 
     state.history_a.append(priceA)
     state.history_b.append(priceB)
+    state.b_highs.append(priceB)
     state.b_ema_fast = update_ema(state.b_ema_fast, priceB, 10)
-    state.b_ema_slow = update_ema(state.b_ema_slow, priceB, 40)
+    state.b_ema_slow = update_ema(state.b_ema_slow, priceB, 30)
 
     if len(state.history_a) < 25:
         return {'Asset A': 0.0, 'Asset B': 0.0, 'Cash': 1.0}
@@ -43,31 +49,37 @@ def make_decision(epoch: int, priceA: float, priceB: float):
     alloc_a = 0.0
     if std_a > 0:
         z_score_a = (priceA - mean_a) / std_a
-        if z_score_a < -1.0:
-            alloc_a = 0.8
-        elif z_score_a < 0.0:
-            alloc_a = 0.4
-        elif z_score_a < 1.0:
-            alloc_a = 0.1
+        if z_score_a < -1.5:
+            alloc_a = 1.0
+        elif z_score_a < -0.5:
+            alloc_a = 0.5
         else:
             alloc_a = 0.0
 
     alloc_b = 0.0
-    
-    if state.b_ema_slow is not None:
-        if priceB > state.b_ema_slow:
-            if priceB > state.b_ema_fast:
-                alloc_b = 1.0
-            else:
-                alloc_b = 0.8
+    is_bull = False
+    if state.b_ema_slow is not None and priceB > state.b_ema_slow:
+        is_bull = True
+        if priceB > state.b_ema_fast:
+            alloc_b = 1.0
         else:
+            alloc_b = 0.8
+
+    recent_high_b = max(state.b_highs)
+    if recent_high_b > 0:
+        drawdown_b = (priceB - recent_high_b) / recent_high_b
+        if drawdown_b < -0.035:
             alloc_b = 0.0
 
     _, std_b = get_stats(state.history_b)
-    vol_b_pct = std_b / priceB if priceB > 0 else 0
-
-    if vol_b_pct > 0.03:
-        alloc_b *= 0.5
+    vol_b_pct = std_b / priceB if priceB > 0 else 0.0
+    
+    target_vol = 0.03
+    if vol_b_pct > 0:
+        scalar = target_vol / vol_b_pct
+        scalar = min(1.0, scalar)
+        scalar = max(0.5, scalar) 
+        alloc_b *= scalar
     total_req = alloc_a + alloc_b
     
     final_a = 0.0
